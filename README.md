@@ -1,0 +1,2 @@
+# ActivationCompress
+Compress neural activations
