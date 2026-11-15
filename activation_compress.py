@@ -397,7 +397,10 @@ class ActivationCompressorWrapper:
         self._hooks = []
 
         for idx, (name, module) in enumerate(self.model.named_modules()):
-            if self.layer_pattern in name and isinstance(module, nn.Linear):
+            if isinstance(module, nn.Linear) and (
+                self.layer_pattern in name
+                or self.layer_pattern in type(module).__name__
+            ):
                 hook = module.register_forward_hook(
                     self.compressor.create_hook(idx)
                 )
