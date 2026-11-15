@@ -499,9 +499,6 @@ class DynamicActivationCompressor(nn.Module):
         Returns:
             Reconstructed activation
         """
-        # Save original shape
-        original_shape = x.shape
-
         # Compress
         batch_dim = x.shape[:-1]
         x_flat = x.reshape(-1, self.input_dim)
