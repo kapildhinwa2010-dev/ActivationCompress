@@ -243,12 +243,13 @@ class ActivationCompressor(nn.Module):
         Returns:
             Hook function
         """
-        if layer_id not in self._basis_dict:
-            raise ValueError(f"Basis not calibrated for layer {layer_id}")
-
-        basis = self._basis_dict[layer_id]
+        basis = getattr(self, '_basis_dict', {}).get(layer_id)
 
         def hook(module, inp, out):
+            if basis is None:
+                # Layer was never calibrated: pass the activation through
+                # unchanged instead of crashing the forward pass.
+                return out
             x = out.float()
             # Project to compressed space
             batch_dim = x.shape[:-1]
@@ -396,15 +397,17 @@ class ActivationCompressorWrapper:
         """Add compression hooks to matching layers."""
         self._hooks = []
 
-        for idx, (name, module) in enumerate(self.model.named_modules()):
+        matched = 0
+        for name, module in self.model.named_modules():
             if isinstance(module, nn.Linear) and (
                 self.layer_pattern in name
                 or self.layer_pattern in type(module).__name__
             ):
                 hook = module.register_forward_hook(
-                    self.compressor.create_hook(idx)
+                    self.compressor.create_hook(matched)
                 )
                 self._hooks.append(hook)
+                matched += 1
 
     def remove_compression_hooks(self) -> None:
         """Remove all compression hooks."""
