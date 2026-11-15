@@ -424,13 +424,13 @@ class TestEdgeCases:
         # CPU
         activation_cpu = torch.randn(32, 128)
         compressed_cpu, _ = compressor.compress(activation_cpu)
-        assert compressed_cpu.is_on_cpu()
-        
+        assert compressed_cpu.device.type == 'cpu'
+
         # CUDA (if available)
         if torch.cuda.is_available():
             activation_cuda = torch.randn(32, 128).cuda()
             compressed_cuda, _ = compressor.compress(activation_cuda)
-            assert compressed_cuda.is_on_cuda()
+            assert compressed_cuda.device.type == 'cuda'
 
     def test_different_dtypes(self):
         """Test with different dtypes."""
@@ -510,9 +510,8 @@ class TestIntegration:
             layer,
         )
         
-        # Calibrate
-        inputs = {'src': torch.randn(10, 32, 128)}
-        stats = compressor.calibrate(model, inputs)
+        # Calibrate (nn.Sequential takes a single positional input)
+        stats = compressor.calibrate(model, torch.randn(10, 32, 128))
         
         # Should work
         assert len(stats) > 0

@@ -15,7 +15,7 @@ Key Features:
 
 import torch
 import torch.nn as nn
-from typing import Optional, Tuple, List, Dict, Callable
+from typing import Optional, Tuple, List, Dict, Callable, Union
 from dataclasses import dataclass
 import warnings
 
@@ -151,7 +151,7 @@ class ActivationCompressor(nn.Module):
     def calibrate(
         self,
         model: nn.Module,
-        inputs: Dict[str, torch.Tensor],
+        inputs: Union[Dict[str, torch.Tensor], torch.Tensor],
         layer_idx: Optional[int] = None
     ) -> Dict[str, CompressionStats]:
         """
@@ -186,7 +186,10 @@ class ActivationCompressor(nn.Module):
 
         # Forward pass
         with torch.no_grad():
-            model(**inputs)
+            if isinstance(inputs, dict):
+                model(**inputs)
+            else:
+                model(inputs)
 
         # Remove hooks
         for h in hooks:
