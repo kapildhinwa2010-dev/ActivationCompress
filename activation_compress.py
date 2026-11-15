@@ -66,6 +66,7 @@ class ActivationCompressor(nn.Module):
         self.layer_idx = layer_idx
         self._hooks: List[torch.utils.hooks.RemovableHandle] = []
         self._basis: Optional[torch.Tensor] = None
+        self._basis_dict: Dict[int, torch.Tensor] = {}
         self._stats: Dict[str, CompressionStats] = {}
 
     def _validate_method(self) -> None:
@@ -128,7 +129,7 @@ class ActivationCompressor(nn.Module):
         centered = flat - mean
 
         # Compute covariance
-        cov = centered.T @ centered / (centered.shape[0] - 1)
+        cov = centered.T @ centered / max(1, centered.shape[0] - 1)
 
         # Eigen decomposition
         _, vecs = torch.linalg.eigh(cov)
@@ -219,7 +220,7 @@ class ActivationCompressor(nn.Module):
             recon_norm = (reconstructed ** 2).sum()
             error = ((flat_act - reconstructed) ** 2).sum()
 
-            variance_retained = recon_norm / (original_norm + 1e-9)
+            variance_retained = min(1.0, recon_norm / (original_norm + 1e-9))
             compression_ratio = (act.numel() / (codes.numel() + basis.numel()))
 
             stats[f"layer_{layer_id}"] = CompressionStats(
@@ -296,11 +297,12 @@ class ActivationCompressor(nn.Module):
             original_shape=original_shape,
             compressed_shape=codes.shape,
             compression_ratio=activation.numel() / (codes.numel() + basis.numel()),
-            variance_retained=recon_norm.item() / (original_norm.item() + 1e-9),
+            variance_retained=min(1.0, recon_norm.item() / (original_norm.item() + 1e-9)),
             reconstruction_error=error.item()
         )
 
-        return reconstructed.reshape(*original_shape[:-1], -1), stats
+        out = reconstructed.reshape(*original_shape[:-1], -1).to(activation.dtype)
+        return out, stats
 
     def get_stats(self) -> Dict[str, CompressionStats]:
         """Get compression statistics."""
