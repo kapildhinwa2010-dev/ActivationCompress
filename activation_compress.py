@@ -220,14 +220,14 @@ class ActivationCompressor(nn.Module):
             recon_norm = (reconstructed ** 2).sum()
             error = ((flat_act - reconstructed) ** 2).sum()
 
-            variance_retained = min(1.0, recon_norm / (original_norm + 1e-9))
+            variance_retained = min(1.0, float(recon_norm) / (float(original_norm) + 1e-9))
             compression_ratio = (act.numel() / (codes.numel() + basis.numel()))
 
             stats[f"layer_{layer_id}"] = CompressionStats(
                 original_shape=original_shape,
                 compressed_shape=codes.shape,
                 compression_ratio=compression_ratio,
-                variance_retained=variance_retained.item(),
+                variance_retained=variance_retained,
                 reconstruction_error=error.item()
             )
 
@@ -278,6 +278,17 @@ class ActivationCompressor(nn.Module):
         Returns:
             Tuple of (compressed_activation, stats)
         """
+        if self.target_dim <= 0:
+            # Degenerate config: pass through unchanged (documented behavior).
+            stats = CompressionStats(
+                original_shape=activation.shape,
+                compressed_shape=activation.shape,
+                compression_ratio=1.0,
+                variance_retained=1.0,
+                reconstruction_error=0.0,
+            )
+            return activation.clone(), stats
+
         original_shape = activation.shape
         flat = activation.reshape(-1, activation.shape[-1]).float()
 
