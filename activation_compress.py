@@ -15,9 +15,7 @@ Key Features:
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-import numpy as np
-from typing import Optional, Tuple, List, Dict, Any, Callable
+from typing import Optional, Tuple, List, Dict, Callable
 from dataclasses import dataclass
 import warnings
 
@@ -32,7 +30,7 @@ class CompressionStats:
     compression_ratio: float
     variance_retained: float
     reconstruction_error: float
-    
+
     def __str__(self) -> str:
         return (
             f"CompressionStats(original={self.original_shape}, "
@@ -46,16 +44,16 @@ class CompressionStats:
 class ActivationCompressor(nn.Module):
     """
     Base class for activation compression.
-    
+
     Provides infrastructure for compressing activations during forward passes
     using various dimensionality reduction techniques.
-    
+
     Args:
         target_dim: Target dimension after compression
         method: Compression method ('svd', 'pca', 'random')
         layer_idx: Layer index to compress (if None, compresses all)
     """
-    
+
     def __init__(
         self,
         target_dim: int = 64,
@@ -69,7 +67,7 @@ class ActivationCompressor(nn.Module):
         self._hooks: List[torch.utils.hooks.RemovableHandle] = []
         self._basis: Optional[torch.Tensor] = None
         self._stats: Dict[str, CompressionStats] = {}
-        
+
     def _validate_method(self) -> None:
         """Validate compression method."""
         valid_methods = {'svd', 'pca', 'random', 'autoencoder'}
@@ -77,7 +75,7 @@ class ActivationCompressor(nn.Module):
             raise ValueError(
                 f"Invalid method '{self.method}'. Must be one of {valid_methods}"
             )
-    
+
     def _get_basis(
         self,
         activation: torch.Tensor,
@@ -85,11 +83,11 @@ class ActivationCompressor(nn.Module):
     ) -> torch.Tensor:
         """
         Compute compression basis from activation.
-        
+
         Args:
             activation: Input activation tensor
             target_dim: Target dimension
-            
+
         Returns:
             Basis tensor for projection
         """
@@ -101,7 +99,7 @@ class ActivationCompressor(nn.Module):
             return self._random_basis(activation, target_dim)
         else:
             raise ValueError(f"Unknown method: {self.method}")
-    
+
     def _svd_basis(
         self,
         activation: torch.Tensor,
@@ -110,13 +108,13 @@ class ActivationCompressor(nn.Module):
         """Compute SVD basis (top-k right singular vectors)."""
         # Flatten activation to 2D
         flat = activation.reshape(-1, activation.shape[-1]).float()
-        
+
         # Compute SVD
         _, _, vt = torch.linalg.svd(flat, full_matrices=False)
-        
+
         # Return top-k right singular vectors
         return vt[:target_dim].T  # (D, k)
-    
+
     def _pca_basis(
         self,
         activation: torch.Tensor,
@@ -124,20 +122,20 @@ class ActivationCompressor(nn.Module):
     ) -> torch.Tensor:
         """Compute PCA basis (eigenvectors of covariance)."""
         flat = activation.reshape(-1, activation.shape[-1]).float()
-        
+
         # Center the data
         mean = flat.mean(dim=0)
         centered = flat - mean
-        
+
         # Compute covariance
         cov = centered.T @ centered / (centered.shape[0] - 1)
-        
+
         # Eigen decomposition
         _, vecs = torch.linalg.eigh(cov)
-        
+
         # Return top-k eigenvectors
         return vecs[:, -target_dim:].flip(dims=[1])
-    
+
     def _random_basis(
         self,
         activation: torch.Tensor,
@@ -149,7 +147,7 @@ class ActivationCompressor(nn.Module):
         # Orthogonalize
         q, _ = torch.linalg.qr(basis)
         return q
-    
+
     def calibrate(
         self,
         model: nn.Module,
@@ -158,69 +156,69 @@ class ActivationCompressor(nn.Module):
     ) -> Dict[str, CompressionStats]:
         """
         Calibrate compression basis from model activations.
-        
+
         Args:
             model: PyTorch model
             inputs: Input tensors for calibration
             layer_idx: Specific layer to calibrate (overrides self.layer_idx)
-            
+
         Returns:
             Dictionary of compression statistics per layer
         """
         self._validate_method()
         idx = layer_idx if layer_idx is not None else self.layer_idx
-        
+
         # Collect activations
         activations: Dict[int, torch.Tensor] = {}
-        
+
         def hook_fn(module, inp, out):
             # Store activation
             layer_id = len(activations)
             activations[layer_id] = out.detach().float().clone()
             return out
-        
+
         # Register hooks on all layers
         hooks = []
         for name, module in model.named_modules():
             if isinstance(module, (nn.Linear, nn.Conv2d)):
                 h = module.register_forward_hook(hook_fn)
                 hooks.append(h)
-        
+
         # Forward pass
         with torch.no_grad():
             model(**inputs)
-        
+
         # Remove hooks
         for h in hooks:
             h.remove()
-        
+
         # Compute basis for each layer
         self._basis_dict: Dict[int, torch.Tensor] = {}
         stats: Dict[str, CompressionStats] = {}
-        
+
         for layer_id, act in activations.items():
             if idx is not None and layer_id != idx:
                 continue
-            
+
             original_shape = act.shape
             flat_act = act.reshape(-1, act.shape[-1])
-            
+
             # Compute basis
             basis = self._get_basis(act, self.target_dim)
             self._basis_dict[layer_id] = basis
-            
+
             # Project
             codes = flat_act @ basis  # (N, k)
             reconstructed = codes @ basis.T  # (N, D)
-            
+
             # Compute stats
             original_norm = (flat_act ** 2).sum()
             recon_norm = (reconstructed ** 2).sum()
             error = ((flat_act - reconstructed) ** 2).sum()
-            
+
             variance_retained = recon_norm / (original_norm + 1e-9)
             compression_ratio = (act.numel() / (codes.numel() + basis.numel()))
-            
+
             stats[f"layer_{layer_id}"] = CompressionStats(
                 original_shape=original_shape,
                 compressed_shape=codes.shape,
@@ -228,28 +226,28 @@ class ActivationCompressor(nn.Module):
                 variance_retained=variance_retained.item(),
                 reconstruction_error=error.item()
             )
-        
+
         self._stats = stats
         return stats
-    
+
     def create_hook(
         self,
         layer_id: int
     ) -> Callable:
         """
         Create a forward hook for compression.
-        
+
         Args:
             layer_id: Layer identifier
-            
+
         Returns:
             Hook function
         """
         if layer_id not in self._basis_dict:
             raise ValueError(f"Basis not calibrated for layer {layer_id}")
-        
+
         basis = self._basis_dict[layer_id]
-        
+
         def hook(module, inp, out):
             x = out.float()
             # Project to compressed space
@@ -259,37 +257,37 @@ class ActivationCompressor(nn.Module):
             reconstructed = codes @ basis.T
             # Reshape back
             return reconstructed.reshape(*batch_dim, -1).to(out.dtype)
-        
+
         return hook
-    
+
     def compress(
         self,
         activation: torch.Tensor
     ) -> Tuple[torch.Tensor, CompressionStats]:
         """
         Compress a single activation tensor.
-        
+
         Args:
             activation: Input activation tensor
-            
+
         Returns:
             Tuple of (compressed_activation, stats)
         """
         original_shape = activation.shape
         flat = activation.reshape(-1, activation.shape[-1]).float()
-        
+
         # Compute basis
         basis = self._get_basis(activation, self.target_dim)
-        
+
         # Project
         codes = flat @ basis
         reconstructed = codes @ basis.T
-        
+
         # Compute stats
         original_norm = (flat ** 2).sum()
         recon_norm = (reconstructed ** 2).sum()
         error = ((flat - reconstructed) ** 2).sum()
-        
+
         stats = CompressionStats(
             original_shape=original_shape,
             compressed_shape=codes.shape,
@@ -297,13 +295,13 @@ class ActivationCompressor(nn.Module):
             variance_retained=recon_norm.item() / (original_norm.item() + 1e-9),
             reconstruction_error=error.item()
         )
-        
+
         return reconstructed.reshape(*original_shape[:-1], -1), stats
-    
+
     def get_stats(self) -> Dict[str, CompressionStats]:
         """Get compression statistics."""
         return self._stats
-    
+
     def clear_hooks(self) -> None:
         """Remove all registered hooks."""
         for h in self._hooks:
@@ -314,15 +312,15 @@ class ActivationCompressor(nn.Module):
 class SVDCompressor(ActivationCompressor):
     """
     SVD-based activation compressor.
-    
+
     Uses Singular Value Decomposition to find the most significant
     directions in activation space and projects activations onto them.
-    
+
     Args:
         target_dim: Number of singular vectors to keep
         layer_idx: Specific layer to compress
     """
-    
+
     def __init__(
         self,
         target_dim: int = 64,
@@ -334,15 +332,15 @@ class SVDCompressor(ActivationCompressor):
 class PCACompressor(ActivationCompressor):
     """
     PCA-based activation compressor.
-    
+
     Uses Principal Component Analysis to find directions of
     maximum variance in activation space.
-    
+
     Args:
         target_dim: Number of principal components to keep
         layer_idx: Specific layer to compress
     """
-    
+
     def __init__(
         self,
         target_dim: int = 64,
@@ -354,15 +352,15 @@ class PCACompressor(ActivationCompressor):
 class RandomProjectionCompressor(ActivationCompressor):
     """
     Random projection-based activation compressor.
-    
+
     Uses random orthogonal projections to compress activations.
     More efficient than SVD/PCA but may lose more information.
-    
+
     Args:
         target_dim: Projection dimension
         layer_idx: Specific layer to compress
     """
-    
+
     def __init__(
         self,
         target_dim: int = 64,
@@ -374,15 +372,15 @@ class RandomProjectionCompressor(ActivationCompressor):
 class ActivationCompressorWrapper:
     """
     Wrapper for easy integration with PyTorch models.
-    
+
     Simplifies the process of adding compression hooks to models.
-    
+
     Args:
         model: PyTorch model to compress
         compressor: ActivationCompressor instance
         layer_pattern: Pattern to match layer names
     """
-    
+
     def __init__(
         self,
         model: nn.Module,
@@ -393,29 +391,29 @@ class ActivationCompressorWrapper:
         self.compressor = compressor
         self.layer_pattern = layer_pattern
         self._hooks: List[torch.utils.hooks.RemovableHandle] = []
-    
+
     def add_compression_hooks(self) -> None:
         """Add compression hooks to matching layers."""
         self._hooks = []
-        
+
         for idx, (name, module) in enumerate(self.model.named_modules()):
             if self.layer_pattern in name and isinstance(module, nn.Linear):
                 hook = module.register_forward_hook(
                     self.compressor.create_hook(idx)
                 )
                 self._hooks.append(hook)
-    
+
     def remove_compression_hooks(self) -> None:
         """Remove all compression hooks."""
         for h in self._hooks:
             h.remove()
         self._hooks = []
-    
+
     def __enter__(self):
         """Context manager entry."""
         self.add_compression_hooks()
         return self
-    
+
     def __exit__(self, *args):
         """Context manager exit."""
         self.remove_compression_hooks()
@@ -428,17 +426,17 @@ def create_activation_compressor(
 ) -> ActivationCompressor:
     """
     Factory function to create activation compressors.
-    
+
     Args:
         method: Compression method ('svd', 'pca', 'random')
         target_dim: Target dimension
         layer_idx: Layer index
-        
+
     Returns:
         ActivationCompressor instance
     """
     method = method.lower()
-    
+
     if method == 'svd':
         return SVDCompressor(target_dim=target_dim, layer_idx=layer_idx)
     elif method == 'pca':
@@ -452,15 +450,15 @@ def create_activation_compressor(
 class DynamicActivationCompressor(nn.Module):
     """
     Dynamic activation compressor with learnable basis.
-    
+
     Learns optimal compression basis during training.
-    
+
     Args:
         input_dim: Input dimension
         target_dim: Target compressed dimension
         num_layers: Number of compression layers
     """
-    
+
     def __init__(
         self,
         input_dim: int,
@@ -470,7 +468,7 @@ class DynamicActivationCompressor(nn.Module):
         super().__init__()
         self.input_dim = input_dim
         self.target_dim = target_dim
-        
+
         # Learnable compression network
         layers = []
         for i in range(num_layers):
@@ -478,9 +476,9 @@ class DynamicActivationCompressor(nn.Module):
             out_dim = target_dim if i == num_layers - 1 else target_dim
             layers.append(nn.Linear(in_dim, out_dim))
             layers.append(nn.SiLU())
-        
+
         self.compressor = nn.Sequential(*layers)
-        
+
         # Learnable decompressor
         layers = []
         for i in range(num_layers):
@@ -488,38 +486,38 @@ class DynamicActivationCompressor(nn.Module):
             out_dim = input_dim if i == num_layers - 1 else target_dim
             layers.append(nn.Linear(in_dim, out_dim))
             layers.append(nn.SiLU())
-        
+
         self.decompressor = nn.Sequential(*layers)
-    
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
         Compress and decompress activation.
-        
+
         Args:
             x: Input activation tensor
-            
+
         Returns:
             Reconstructed activation
         """
         # Save original shape
         original_shape = x.shape
-        
+
         # Compress
         batch_dim = x.shape[:-1]
         x_flat = x.reshape(-1, self.input_dim)
         compressed = self.compressor(x_flat)
-        
+
         # Decompress
         reconstructed = self.decompressor(compressed)
-        
+
         return reconstructed.reshape(*batch_dim, self.input_dim)
-    
+
     def get_compression_ratio(self) -> float:
         """Get compression ratio."""
         params_compressor = sum(p.numel() for p in self.compressor.parameters())
         params_decompressor = sum(p.numel() for p in self.decompressor.parameters())
         total_params = params_compressor + params_decompressor
-        
+
         return self.input_dim / (self.target_dim + total_params / self.input_dim)
 
 
